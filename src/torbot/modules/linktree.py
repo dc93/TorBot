@@ -4,11 +4,13 @@ Module is used for analyzing link relationships
 import http.client
 import os
 import json
+import time
 import httpx
 import validators
 import logging
 import phonenumbers
 
+from typing import Optional
 from urllib import parse
 from tabulate import tabulate
 from treelib import Tree, exceptions, Node
@@ -17,6 +19,9 @@ from bs4 import BeautifulSoup
 from .color import color
 from .config import project_root_directory
 from .nlp.main import classify
+
+# Minimum delay between HTTP requests (seconds)
+REQUEST_DELAY = 0.5
 
 
 class LinkNode(Node):
@@ -46,43 +51,72 @@ class LinkTree(Tree):
         self._url = url
         self._depth = depth
         self._client = client
+        self._visited: set[str] = set()
 
     def load(self) -> None:
-        self._append_node(id=self._url, parent_id=None)
+        self._append_node(url=self._url, parent_id=None)
         self._build_tree(url=self._url, depth=self._depth)
 
-    def _append_node(self, id: str, parent_id: str or None) -> None:
+    def _fetch(self, url: str) -> Optional[httpx.Response]:
+        """Fetch a URL with error handling and rate limiting."""
+        try:
+            time.sleep(REQUEST_DELAY)
+            resp = self._client.get(url)
+            return resp
+        except (httpx.RequestError, httpx.TimeoutException) as e:
+            logging.warning(f"Failed to fetch {url}: {e}")
+            return None
+
+    def _append_node(
+        self, url: str, parent_id: Optional[str], resp: Optional[httpx.Response] = None
+    ) -> None:
         """
-        Creates a node for a tree using the given ID which corresponds to a URL.
+        Creates a node for a tree using the given URL.
         If the parent_id is None, this will be considered a root node.
+        If resp is provided, it will be reused instead of making a new request.
         """
-        resp = self._client.get(id)
+        if url in self._visited:
+            return
+        self._visited.add(url)
+
+        if resp is None:
+            resp = self._fetch(url)
+        if resp is None:
+            return
+
         soup = BeautifulSoup(resp.text, "html.parser")
         title = (
-            soup.title.text.strip() if soup.title is not None else parse_hostname(id)
+            soup.title.text.strip() if soup.title is not None else parse_hostname(url)
         )
         try:
             [classification, accuracy] = classify(resp.text)
             numbers = parse_phone_numbers(soup)
             emails = parse_emails(soup)
             data = LinkNode(
-                title, id, resp.status_code, classification, accuracy, numbers, emails
+                title, url, resp.status_code, classification, accuracy, numbers, emails
             )
-            self.create_node(title, identifier=id, parent=parent_id, data=data)
+            self.create_node(title, identifier=url, parent=parent_id, data=data)
         except exceptions.DuplicatedNodeIdError:
-            logging.debug(f"found a duplicate URL {id}")
+            logging.debug(f"found a duplicate URL {url}")
+        except Exception as e:
+            logging.warning(f"Error processing {url}: {e}")
 
     def _build_tree(self, url: str, depth: int) -> None:
         """
         Builds a tree from the root to the given depth.
         """
-        if depth > 0:
-            depth -= 1
-            resp = self._client.get(url)
-            children = parse_links(resp.text)
-            for child in children:
-                self._append_node(id=child, parent_id=url)
-                self._build_tree(url=child, depth=depth)
+        if depth <= 0:
+            return
+
+        resp = self._fetch(url)
+        if resp is None:
+            return
+
+        children = parse_links(resp.text)
+        for child in children:
+            if child not in self._visited:
+                self._append_node(url=child, parent_id=url)
+                self._build_tree(url=child, depth=depth - 1)
 
     def _get_tree_file_name(self) -> str:
         root_id = self.root
@@ -101,35 +135,41 @@ class LinkTree(Tree):
         file_name = self._get_tree_file_name()
         self.save2file(f"{file_name}.txt")
 
-    def saveJSON(self) -> None:
+    def save_json(self) -> None:
         """
-        Saves the tree to the current working directory under the given file name in JSON.
+        Saves the tree as JSON to the current working directory.
         """
         json_data = self._to_json()
         file_name = self._get_tree_file_name()
         with open(f"{file_name}.json", "w+") as f:
             f.write(json_data)
 
+    # Keep old name for backwards compat during transition
+    saveJSON = save_json
+
     def _to_json(self) -> str:
         json_data = self.to_json()
         return json.dumps(json.loads(json_data), indent=2)
 
-    def showJSON(self) -> None:
+    def show_json(self) -> None:
         """
         Prints tree to console as JSON
         """
         print(self._to_json())
 
-    def showTable(self) -> None:
+    # Keep old name for backwards compat during transition
+    showJSON = show_json
+
+    def show_table(self) -> None:
         """
-        Prints the status of a link based on it's connection status
+        Prints the status of a link based on its connection status
         """
         nodes = self.all_nodes_itr()
         table_data = []
 
         def insert(node, color_code):
             status = str(node.data.status)
-            code = http.client.responses[node.data.status]
+            code = http.client.responses.get(node.data.status, "Unknown")
             status_message = f"{status} {code}"
             table_data.append(
                 [
@@ -143,6 +183,8 @@ class LinkTree(Tree):
             )
 
         for node in nodes:
+            if node.data is None:
+                continue
             status_code = node.data.status
             if 200 <= status_code < 300:
                 insert(node, "green")
@@ -154,6 +196,9 @@ class LinkTree(Tree):
         headers = ["Title", "URL", "Status", "Phone Numbers", "Emails", "Category"]
         table = tabulate(table_data, headers=headers)
         print(table)
+
+    # Keep old name for backwards compat during transition
+    showTable = show_table
 
 
 def parse_hostname(url: str) -> str:

@@ -262,7 +262,7 @@ def test_linktree_handles_duplicate_links():
 
 
 def test_linktree_save_json_creates_file():
-    """Test saveJSON writes a valid JSON file with tree structure."""
+    """Test save_json writes a valid JSON file with tree structure."""
     html = '<html><title>Test JSON Save</title></html>'
 
     client = FakeClient({
@@ -275,7 +275,7 @@ def test_linktree_save_json_creates_file():
     with tempfile.TemporaryDirectory() as tmpdir:
         # Patch project_root_directory to use temp dir
         with patch("torbot.modules.linktree.project_root_directory", tmpdir):
-            tree.saveJSON()
+            tree.save_json()
 
             # Check that JSON file was created
             json_files = list(Path(tmpdir).glob("*.json"))

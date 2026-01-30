@@ -97,7 +97,7 @@ def run(arg_parser: argparse.ArgumentParser, version: str) -> None:
         if args.save == "tree":
             tree.save()
         elif args.save == "json":
-            tree.saveJSON()
+            tree.save_json()
 
         if args.html == "display":
             fetch_html(client, args.url, tree)
@@ -106,11 +106,11 @@ def run(arg_parser: argparse.ArgumentParser, version: str) -> None:
 
         # always print something, table is the default
         if args.visualize == "table" or not args.visualize:
-            tree.showTable()
+            tree.show_table()
         elif args.visualize == "tree":
             print(tree)
         elif args.visualize == "json":
-            tree.showJSON()
+            tree.show_json()
 
     print("\n\n")
 

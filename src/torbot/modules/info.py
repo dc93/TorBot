@@ -13,46 +13,6 @@ from termcolor import cprint
 
 from torbot.modules.linktree import LinkTree
 
-keys = set()  # high entropy strings, prolly secret keys
-files = set()  # pdf, css, png etc.
-intel = set()  # emails, website accounts, aws buckets etc.
-robots = set()  # entries of robots.txt
-custom = set()  # string extracted by custom regex pattern
-failed = set()  # urls that photon failed to crawl
-scripts = set()  # javascript files
-external = set()  # urls that don't belong to the target i.e. out-of-scope
-fuzzable = set()  # urls that have get params in them e.g. example.com/page.php?id=2
-endpoints = set()  # urls found from javascript files
-processed = set()  # urls that have been crawled
-
-everything = []
-bad_intel = set()  # unclean intel urls
-bad_scripts = set()  # unclean javascript file urls
-datasets = [
-    files,
-    intel,
-    robots,
-    custom,
-    failed,
-    scripts,
-    external,
-    fuzzable,
-    endpoints,
-    keys,
-]
-dataset_names = [
-    "files",
-    "intel",
-    "robots",
-    "custom",
-    "failed",
-    "scripts",
-    "external",
-    "fuzzable",
-    "endpoints",
-    "keys",
-]
-
 
 def execute_all(
     client: httpx.Client, link: str, *, display_status: bool = False
@@ -67,7 +27,6 @@ def execute_all(
     """
 
     resp = client.get(url=link)
-    soup = BeautifulSoup(resp.text, "html.parser")
     validation_functions = [
         get_robots_txt,
         get_dot_git,
@@ -83,8 +42,8 @@ def execute_all(
             logging.debug(e)
             cprint("Error", "red")
 
+    soup = BeautifulSoup(resp.text, "html.parser")
     display_webpage_description(soup)
-    # display_headers(response)
 
 
 def fetch_html(
@@ -121,56 +80,64 @@ def display_headers(response):
         print("*", key, ":", val)
 
 
-def get_robots_txt(client: httpx.Client, target: str, response: str) -> None:
+def get_robots_txt(
+    client: httpx.Client, target: str, response: httpx.Response
+) -> None:
     """Check link for Robot.txt, and if found, add link to robots dataset.
 
     Args:
         target (str): URL to be checked.
-        response (object): Response object containing data to check.
+        response (httpx.Response): Response object containing data to check.
     """
     cprint("[*]Checking for Robots.txt", "yellow")
-    url = target
-    target = "{0.scheme}://{0.netloc}/".format(urlsplit(url))
-    client.get(target + "robots.txt")
-    print(target + "robots.txt")
+    base = "{0.scheme}://{0.netloc}/".format(urlsplit(target))
+    client.get(base + "robots.txt")
+    print(base + "robots.txt")
 
     matches = re.findall(r"Allow: (.*)|Disallow: (.*)", response.text)
+    robots = set()
     for match in matches:
         match = "".join(match)
         if "*" not in match:
-            url = target + match
+            url = base + match
             robots.add(url)
         cprint("Robots.txt found", "blue")
+    if robots:
         print(robots)
 
 
-def get_intel(client: httpx.Client, url: str, response: str) -> None:
-    """Check link for intel, and if found, add link to intel dataset,
+def get_intel(
+    client: httpx.Client, url: str, response: httpx.Response
+) -> None:
+    """Check link for intel, and if found, print results,
     including but not limited to website accounts and AWS buckets.
 
     Args:
-        target (str): URL to be checked.
-        response (object): Response object containing data to check.
+        url (str): URL to be checked.
+        response (httpx.Response): Response object containing data to check.
     """
-    intel = set()
     regex = r"""([\w\.-]+s[\w\.-]+\.amazonaws\.com)|([\w\.-]+@[\w\.-]+\.[\.\w]+)"""
-    matches = re.findall(regex, response)
-    print("Intel\n--------\n\n")
-    for match in matches:
-        intel.add(match)
+    matches = re.findall(regex, response.text)
+    if matches:
+        print("Intel\n--------\n")
+        intel = set()
+        for match in matches:
+            intel.add(match)
+        print(intel)
 
 
-def get_dot_git(client: httpx.Client, target: str, response: str) -> None:
+def get_dot_git(
+    client: httpx.Client, target: str, response: httpx.Response
+) -> None:
     """Check link for .git folders exposed on public domain.
 
     Args:
         target (str): URL to be checked.
-        response (object): Response object containing data to check.
+        response (httpx.Response): Response object containing data to check.
     """
     cprint("[*]Checking for .git folder", "yellow")
-    url = target
-    target = "{0.scheme}://{0.netloc}/".format(urlsplit(url))
-    resp = client.get(target + "/.git/config")
+    base = "{0.scheme}://{0.netloc}/".format(urlsplit(target))
+    resp = client.get(base + "/.git/config")
     if resp.status_code != 404:
         cprint("Alert!", "red")
         cprint(".git folder exposed publicly", "red")
@@ -178,30 +145,35 @@ def get_dot_git(client: httpx.Client, target: str, response: str) -> None:
         cprint("NO .git folder found", "blue")
 
 
-def get_bitcoin_address(client: httpx.Client, target: str, response: str) -> None:
+def get_bitcoin_address(
+    client: httpx.Client, target: str, response: httpx.Response
+) -> None:
     """Check link for Bitcoin addresses, and if found, print.
 
     Args:
         target (str): URL to be checked.
-        response (object): Response object containing data to check.
+        response (httpx.Response): Response object containing data to check.
     """
-    bitcoins = re.findall(r"^[13][a-km-zA-HJ-NP-Z1-9]{25,34}$", response)
+    bitcoins = re.findall(
+        r"[13][a-km-zA-HJ-NP-Z1-9]{25,34}", response.text
+    )
     print("BTC FOUND: ", len(bitcoins))
     for bitcoin in bitcoins:
         print("BTC: ", bitcoin)
 
 
-def get_dot_svn(client: httpx.Client, target: str, response: str) -> None:
-    """Check link for .svn folders exposed on public domain=.
+def get_dot_svn(
+    client: httpx.Client, target: str, response: httpx.Response
+) -> None:
+    """Check link for .svn folders exposed on public domain.
 
     Args:
         target (str): URL to be checked.
-        response (object): Response object containing data to check.
+        response (httpx.Response): Response object containing data to check.
     """
     cprint("[*]Checking for .svn folder", "yellow")
-    url = target
-    target = "{0.scheme}://{0.netloc}/".format(urlsplit(url))
-    resp = client.get(target + "/.svn/entries")
+    base = "{0.scheme}://{0.netloc}/".format(urlsplit(target))
+    resp = client.get(base + "/.svn/entries")
     if resp.status_code != 404:
         cprint("Alert!", "red")
         cprint(".SVN folder exposed publicly", "red")
@@ -209,17 +181,18 @@ def get_dot_svn(client: httpx.Client, target: str, response: str) -> None:
         cprint("NO .SVN folder found", "blue")
 
 
-def get_dot_htaccess(client: httpx.Client, target: str, response: str) -> None:
+def get_dot_htaccess(
+    client: httpx.Client, target: str, response: httpx.Response
+) -> None:
     """Check link for .htaccess files on public domain.
 
     Args:
         target (str): URL to be checked.
-        response (object): Response object containing data to check.
+        response (httpx.Response): Response object containing data to check.
     """
     cprint("[*]Checking for .htaccess", "yellow")
-    url = target
-    target = "{0.scheme}://{0.netloc}/".format(urlsplit(url))
-    resp = client.get(target + "/.htaccess")
+    base = "{0.scheme}://{0.netloc}/".format(urlsplit(target))
+    resp = client.get(base + "/.htaccess")
     if resp.status_code == 403:
         cprint("403 Forbidden", "blue")
     elif resp.status_code != 404 and resp.status_code != 500:
@@ -227,7 +200,7 @@ def get_dot_htaccess(client: httpx.Client, target: str, response: str) -> None:
         cprint(".htaccess file found!", "blue")
     else:
         cprint("Response", "blue")
-        cprint(resp, "blue")
+        cprint(str(resp.status_code), "blue")
 
 
 def display_webpage_description(soup: BeautifulSoup) -> None:
@@ -240,25 +213,3 @@ def display_webpage_description(soup: BeautifulSoup) -> None:
     metatags = soup.find_all("meta")
     for meta in metatags:
         print("Meta : ", meta)
-
-
-def writer(datasets, dataset_names, output_dir):
-    """Write content of all datasets to file.
-
-    Args:
-        datasets (list): List of datasets containing relevant content.
-        dataset_names (list): Identifiers for each dataset.
-        output_dir (str): Path where data file should be saved.
-    """
-    for dataset, dataset_name in zip(datasets, dataset_names):
-        if dataset:
-            filepath = output_dir + "/" + dataset_name + ".txt"
-
-            with open(filepath, "w+", encoding="utf8") as f:
-                f.write(str("\n".join(dataset)))
-                f.write("\n")
-            # else:
-            #     with open(filepath, 'w+') as f:
-            #         joined = '\n'.join(dataset)
-            #         f.write(str(joined.encode('utf-8')))
-            #         f.write('\n')
