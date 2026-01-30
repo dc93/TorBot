@@ -63,7 +63,7 @@ class LinkTree(Tree):
             time.sleep(REQUEST_DELAY)
             resp = self._client.get(url)
             return resp
-        except (httpx.RequestError, httpx.TimeoutException) as e:
+        except (httpx.RequestError, httpx.TimeoutException, httpx.ProxyError) as e:
             logging.warning(f"Failed to fetch {url}: {e}")
             return None
 
